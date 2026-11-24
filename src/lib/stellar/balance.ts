@@ -27,3 +27,8 @@ export async function getWalletBalances(address: string): Promise<WalletBalances
     usdc: usdcBalance?.balance ?? '0',
   };
 }
+
+export async function getNativeBalance(address: string): Promise<string> {
+  const balances = await getWalletBalances(address);
+  return balances.xlm;
+}

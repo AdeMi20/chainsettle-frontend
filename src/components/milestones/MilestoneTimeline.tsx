@@ -25,9 +25,10 @@ interface Props {
   shipment: Shipment;
   userRole: string;
   onUpdate: () => void;
+  selectedMilestoneIndex?: number;
 }
 
-export function MilestoneTimeline({ shipment, userRole, onUpdate }: Props) {
+export function MilestoneTimeline({ shipment, userRole, onUpdate, selectedMilestoneIndex }: Props) {
   const t = useTranslations('milestones');
   const [error, setError] = useState<string | null>(null);
   const errorRef = useRef<HTMLDivElement>(null);
@@ -47,6 +48,7 @@ export function MilestoneTimeline({ shipment, userRole, onUpdate }: Props) {
           onUpdate={onUpdate}
           isLast={i === shipment.milestones.length - 1}
           onError={(msg) => setError(msg)}
+          isSelected={selectedMilestoneIndex !== undefined ? i === selectedMilestoneIndex : false}
         />
       ))}
       {error && (
@@ -74,6 +76,7 @@ function MilestoneRow({
   onUpdate,
   isLast,
   onError,
+  isSelected = false,
 }: {
   milestone: Milestone;
   shipment: Shipment;
@@ -81,6 +84,7 @@ function MilestoneRow({
   onUpdate: () => void;
   isLast: boolean;
   onError: (msg: string) => void;
+  isSelected?: boolean;
 }) {
   const t = useTranslations('milestones');
   const { address } = useAuthStore();

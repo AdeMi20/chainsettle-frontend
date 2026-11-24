@@ -83,6 +83,12 @@ export const shipmentsApi = {
   },
 };
 
+/** Helper to fetch all shipments */
+export const fetchShipments = async (): Promise<Shipment[]> => {
+  const { data } = await apiClient.get<ApiResponse<PaginatedResponse<Shipment>>>('/shipments');
+  return data.data.data;
+};
+
 // ----------------------------------------------------------------
 // Milestones
 // ----------------------------------------------------------------

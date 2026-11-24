@@ -33,7 +33,7 @@ interface SidebarProps {
 
 export function Sidebar({ open, onClose }: SidebarProps) {
   const pathname = usePathname();
-  const { address, logout } = useAuthStore();
+  const { address, logout, displayName } = useAuthStore();
   const t = useTranslations('navigation');
   const [unreadCount, setUnreadCount] = useState(0);
   const sidebarRef = useRef<HTMLElement>(null);

@@ -2,7 +2,7 @@
 
 import { useEffect, useId, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { ArrowLeft, Plus, Trash2, Loader2, AlertCircle } from 'lucide-react';
+import { ArrowLeft, Plus, Trash2, Loader2, AlertCircle, AlertTriangle } from 'lucide-react';
 import Link from 'next/link';
 import { createShipment } from '@/lib/stellar/contract';
 import { shipmentsApi } from '@/lib/api/services';
@@ -11,6 +11,8 @@ import { generateShipmentId, usdcToStroops } from '@/lib/utils';
 import type { CreateMilestoneInput } from '@/types';
 
 const USDC_ADDRESS = process.env.NEXT_PUBLIC_USDC_ADDRESS!;
+const HIGH_VALUE_THRESHOLD_USDC =
+  Number(process.env.NEXT_PUBLIC_HIGH_VALUE_THRESHOLD_USDC) || 1000;
 const DEFAULT_MILESTONES: CreateMilestoneInput[] = [
   { name: 'Goods Dispatched', paymentPercent: 25 },
   { name: 'In Transit', paymentPercent: 50 },
@@ -44,6 +46,7 @@ export default function CreateShipmentPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [txStep, setTxStep] = useState('');
+  const [confirmationOpen, setConfirmationOpen] = useState(false);
   const draftLoaded = useRef(false);
 
   useEffect(() => {
@@ -114,6 +117,10 @@ export default function CreateShipmentPage() {
   };
 
   const submitShipment = async () => {
+    if (!address) {
+      setError('Wallet is not connected.');
+      return;
+    }
     setLoading(true);
     try {
       setTxStep('Building transaction…');
