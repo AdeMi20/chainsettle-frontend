@@ -3,26 +3,42 @@
  *
  * Global Zustand store for authentication state.
  * Manages the connected Stellar address, JWT token, and user profile.
+ * `expiresAt` is decoded from the JWT `exp` claim and drives the session
+ * timeout warning (see components/auth/SessionTimeoutModal).
  */
 
 import { create } from 'zustand';
 import type { User, SupportedCurrency } from '@/types';
+import type { User } from '@/types';
+import { getTokenExpiry, isExpired } from '@/lib/auth/jwt';
+
+const DEFAULT_COOKIE_MAX_AGE = 7 * 24 * 60 * 60;
+
+function clearStoredSession() {
+  localStorage.removeItem('chainsetttle_token');
+  localStorage.removeItem('chainsetttle_address');
+  document.cookie = 'chainsetttle_token=; path=/; max-age=0';
+}
 
 export interface NotificationPreferences {
   shipmentUpdates: boolean;
   milestoneUpdates: boolean;
   systemAlerts: boolean;
+  desktopNotifications: boolean;
 }
 
 export const defaultNotificationPreferences: NotificationPreferences = {
   shipmentUpdates: true,
   milestoneUpdates: true,
   systemAlerts: true,
+  desktopNotifications: false,
 };
 
 interface AuthState {
   address: string | null;
   token: string | null;
+  /** Token expiry as a ms timestamp, or null if the token has no exp claim */
+  expiresAt: number | null;
   user: User | null;
   displayName: string | null;
   displayCurrency: SupportedCurrency;
@@ -42,6 +58,7 @@ interface AuthState {
 export const useAuthStore = create<AuthState>((set) => ({
   address: null,
   token: null,
+  expiresAt: null,
   user: null,
   displayName: null,
   displayCurrency: 'USD',
@@ -49,10 +66,15 @@ export const useAuthStore = create<AuthState>((set) => ({
   isConnected: false,
 
   setAuth: (address, token, user) => {
+    const expiresAt = getTokenExpiry(token);
     if (typeof window !== 'undefined') {
       localStorage.setItem('chainsetttle_token', token);
       localStorage.setItem('chainsetttle_address', address);
-      document.cookie = `chainsetttle_token=${token}; path=/; max-age=${7 * 24 * 60 * 60}; SameSite=Lax`;
+      // Keep the middleware cookie alive exactly as long as the token itself
+      const maxAge = expiresAt !== null
+        ? Math.max(0, Math.floor((expiresAt - Date.now()) / 1000))
+        : DEFAULT_COOKIE_MAX_AGE;
+      document.cookie = `chainsetttle_token=${token}; path=/; max-age=${maxAge}; SameSite=Lax`;
     }
     const displayName = typeof window !== 'undefined'
       ? localStorage.getItem(`chainsetttle_display_name_${address}`)
@@ -66,6 +88,7 @@ export const useAuthStore = create<AuthState>((set) => ({
     set({
       address,
       token,
+      expiresAt,
       user,
       displayName,
       displayCurrency: storedCurrency || 'USD',
@@ -114,13 +137,12 @@ export const useAuthStore = create<AuthState>((set) => ({
 
   logout: () => {
     if (typeof window !== 'undefined') {
-      localStorage.removeItem('chainsetttle_token');
-      localStorage.removeItem('chainsetttle_address');
-      document.cookie = 'chainsetttle_token=; path=/; max-age=0';
+      clearStoredSession();
     }
     set({
       address: null,
       token: null,
+      expiresAt: null,
       user: null,
       displayName: null,
       displayCurrency: 'USD',
@@ -134,11 +156,19 @@ export const useAuthStore = create<AuthState>((set) => ({
       const token = localStorage.getItem('chainsetttle_token');
       const address = localStorage.getItem('chainsetttle_address');
       if (token && address) {
+        const expiresAt = getTokenExpiry(token);
+        // A stale token from a previous visit — drop it instead of
+        // rendering a "connected" UI whose API calls will all 401
+        if (isExpired(expiresAt)) {
+          clearStoredSession();
+          return;
+        }
         const storedPreferences = localStorage.getItem(`chainsetttle_notification_preferences_${address}`);
         const storedCurrency = (localStorage.getItem(`chainsetttle_display_currency_${address}`) ||
           localStorage.getItem('chainsetttle_display_currency')) as SupportedCurrency | null;
         set({
           token,
+          expiresAt,
           address,
           displayName: localStorage.getItem(`chainsetttle_display_name_${address}`),
           displayCurrency: storedCurrency || 'USD',

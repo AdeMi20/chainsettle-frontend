@@ -10,12 +10,22 @@
 
 import {
   isConnected,
-  getPublicKey,
+  getAddress,
   signTransaction,
   signAuthEntry,
   requestAccess,
   getNetwork,
 } from '@stellar/freighter-api';
+
+type FreighterResult = { error?: { message: string } };
+
+function unwrapFreighterResult<T extends FreighterResult>(result: T): T {
+  if (result.error) {
+    throw new Error(`Freighter: ${result.error.message}`);
+  }
+
+  return result;
+}
 
 // ----------------------------------------------------------------
 // Connection
@@ -24,7 +34,7 @@ import {
 /** Check if Freighter extension is installed in the browser */
 export async function isFreighterInstalled(): Promise<boolean> {
   try {
-    return await isConnected();
+    return unwrapFreighterResult(await isConnected()).isConnected;
   } catch {
     return false;
   }
@@ -32,18 +42,17 @@ export async function isFreighterInstalled(): Promise<boolean> {
 
 /** Request access to the user's Stellar address */
 export async function connectFreighter(): Promise<string> {
-  await requestAccess();
-  return getUserAddress();
+  return unwrapFreighterResult(await requestAccess()).address;
 }
 
 /** Get the current user's Stellar public key */
 export async function getUserAddress(): Promise<string> {
-  return getPublicKey();
+  return unwrapFreighterResult(await getAddress()).address;
 }
 
 /** Get the current network the wallet is connected to */
 export async function getWalletNetwork(): Promise<string> {
-  return getNetwork();
+  return unwrapFreighterResult(await getNetwork()).network;
 }
 
 // ----------------------------------------------------------------
@@ -59,7 +68,9 @@ export async function getWalletNetwork(): Promise<string> {
  * @returns Signed XDR string ready for submission
  */
 export async function signTx(xdr: string, networkPassphrase: string): Promise<string> {
-  return signTransaction(xdr, { networkPassphrase });
+  return unwrapFreighterResult(
+    await signTransaction(xdr, { networkPassphrase }),
+  ).signedTxXdr;
 }
 
 /**
@@ -74,7 +85,14 @@ export async function signAuth(
   entryXdr: string,
   validUntilLedger: number,
 ): Promise<string> {
-  return signAuthEntry(entryXdr, { accountToSign: await getUserAddress() });
+  const result = unwrapFreighterResult(
+    await signAuthEntry(entryXdr, { address: await getUserAddress() }),
+  );
+  if (!result.signedAuthEntry) {
+    throw new Error('Freighter did not return a signed auth entry');
+  }
+
+  return result.signedAuthEntry;
 }
 
 // ----------------------------------------------------------------
@@ -125,6 +143,8 @@ export async function signNonce(nonce: string, networkPassphrase: string): Promi
 // Wallet Change Watcher
 // ----------------------------------------------------------------
 
+const WALLET_POLL_INTERVAL_MS = 3000;
+
 /**
  * Subscribe to wallet changes (account switch, network change).
  * Call the returned unsubscribe function on cleanup.
@@ -132,13 +152,65 @@ export async function signNonce(nonce: string, networkPassphrase: string): Promi
 export function watchWallet(
   onChange: (address: string, network: string) => void,
 ): () => void {
-  const interval = setInterval(async () => {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let running = false;
+  let runAgain = false;
+  let stopped = false;
+
+  const isVisible = () => document.visibilityState !== 'hidden';
+
+  const clearTimer = () => {
+    if (timer !== null) {
+      clearTimeout(timer);
+      timer = null;
+    }
+  };
+
+  const schedule = () => {
+    if (stopped || !isVisible()) return;
+    const jitteredInterval = WALLET_POLL_INTERVAL_MS * (0.9 + Math.random() * 0.2);
+    timer = setTimeout(checkWallet, jitteredInterval);
+  };
+
+  const checkWallet = async () => {
+    if (stopped || !isVisible()) return;
+    if (running) {
+      runAgain = true;
+      return;
+    }
+
+    running = true;
+    runAgain = false;
     try {
       const address = await getUserAddress();
       const network = await getWalletNetwork();
       onChange(address, network);
     } catch {}
-  }, 3000);
+    finally {
+      running = false;
+      if (stopped || !isVisible()) return;
+      if (runAgain) {
+        runAgain = false;
+        void checkWallet();
+      } else {
+        schedule();
+      }
+    }
+  };
 
-  return () => clearInterval(interval);
+  const handleVisibilityChange = () => {
+    clearTimer();
+    if (document.visibilityState !== 'hidden') {
+      void checkWallet();
+    }
+  };
+
+  document.addEventListener('visibilitychange', handleVisibilityChange);
+  schedule();
+
+  return () => {
+    stopped = true;
+    clearTimer();
+    document.removeEventListener('visibilitychange', handleVisibilityChange);
+  };
 }

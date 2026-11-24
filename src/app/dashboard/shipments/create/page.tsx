@@ -3,21 +3,38 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { ArrowLeft, Plus, Trash2, Loader2, AlertCircle, AlertTriangle } from 'lucide-react';
+import { Suspense, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { ArrowLeft, Plus, Trash2, Loader2, AlertCircle, AlertTriangle, BookmarkPlus, CheckCircle2, Copy, X } from 'lucide-react';
 import Link from 'next/link';
 import { createShipment } from '@/lib/stellar/contract';
 import { shipmentsApi } from '@/lib/api/services';
 import { useAuthStore } from '@/lib/hooks/use-auth-store';
-import { generateShipmentId, usdcToStroops } from '@/lib/utils';
+import { useAccountExistence } from '@/lib/hooks/use-account-existence';
+import { normalizeAddress, validateParties, PARTY_ROLE_LABELS, type PartyRole } from '@/lib/stellar/address';
+import { deriveUserRole, generateShipmentId, stroopsToUsdcInput, usdcToStroops } from '@/lib/utils';
+import { useShipmentTemplates, useTemplatesStore } from '@/lib/hooks/use-templates-store';
+import { cloneMilestones, isSavableSplit, type ShipmentTemplate } from '@/lib/templates';
+import { TemplatePicker } from '@/components/templates/TemplatePicker';
+import { SaveTemplateDialog } from '@/components/templates/SaveTemplateDialog';
+import { TransactionError, isTxPending } from '@/components/TransactionError';
 import type { CreateMilestoneInput } from '@/types';
 
 const USDC_ADDRESS = process.env.NEXT_PUBLIC_USDC_ADDRESS!;
 const HIGH_VALUE_THRESHOLD_USDC =
   Number(process.env.NEXT_PUBLIC_HIGH_VALUE_THRESHOLD_USDC) || 1000;
+const USDC_ADDRESS = env.usdcAddress;
+const HIGH_VALUE_THRESHOLD_USDC = 10_000;
 const DEFAULT_MILESTONES: CreateMilestoneInput[] = [
   { name: 'Goods Dispatched', paymentPercent: 25 },
   { name: 'In Transit', paymentPercent: 50 },
   { name: 'Delivered', paymentPercent: 25 },
 ];
+
+type PrefillState = {
+  status: 'loading' | 'loaded' | 'error';
+  sourceId: string;
+};
 
 type ShipmentDraft = {
   shipmentId: string;
@@ -30,12 +47,84 @@ type ShipmentDraft = {
 
 const generateInputId = (suffix: string) => `create-${suffix}`;
 
-export default function CreateShipmentPage() {
+type EditableParty = Exclude<PartyRole, 'buyer'>;
+
+const NETWORK_LABEL =
+  env.stellarNetwork === 'mainnet' ? 'Mainnet' : 'Testnet';
+
+type AddressFieldProps = {
+  role: EditableParty;
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  onBlur: () => void;
+  error?: string;
+  touched: boolean;
+  hint?: string;
+};
+
+function AddressField({ role, label, value, onChange, onBlur, error, touched, hint }: AddressFieldProps) {
+  const inputId = generateInputId(role);
+  const hintId = `${inputId}-hint`;
+  const errorId = `${inputId}-error`;
+  const warningId = `${inputId}-warning`;
+  // Only hit Horizon once the user has left the field with a valid address
+  const existence = useAccountExistence(touched && !error ? value : '');
+
+  const describedBy = [
+    hint && hintId,
+    error && errorId,
+    !error && existence === 'missing' && warningId,
+  ].filter(Boolean).join(' ') || undefined;
+
+  return (
+    <div>
+      <label htmlFor={inputId} className="label">{label}</label>
+      <input
+        id={inputId}
+        placeholder="G..."
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onBlur={onBlur}
+        required
+        spellCheck={false}
+        autoComplete="off"
+        aria-invalid={error ? true : undefined}
+        aria-describedby={describedBy}
+        className={`input font-mono text-xs ${error ? 'border-red-300 focus:border-red-400 focus:ring-red-100' : ''}`}
+      />
+      {hint && (
+        <p id={hintId} className="text-xs text-gray-400 mt-1">{hint}</p>
+      )}
+      {error ? (
+        <p id={errorId} className="text-xs text-red-600 mt-1 flex items-center gap-1">
+          <AlertCircle className="w-3 h-3 flex-shrink-0" aria-hidden="true" />
+          {error}
+        </p>
+      ) : existence === 'checking' ? (
+        <p className="text-xs text-gray-400 mt-1 flex items-center gap-1" aria-live="polite">
+          <Loader2 className="w-3 h-3 animate-spin" aria-hidden="true" />
+          Checking account on {NETWORK_LABEL}…
+        </p>
+      ) : existence === 'missing' ? (
+        <p id={warningId} className="text-xs text-amber-700 mt-1 flex items-center gap-1" aria-live="polite">
+          <AlertTriangle className="w-3 h-3 flex-shrink-0" aria-hidden="true" />
+          This account is not funded on {NETWORK_LABEL}. You can continue, but it must be activated before it can transact.
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function CreateShipmentPageContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const duplicateFrom = searchParams?.get('from') ?? '';
   const { address } = useAuthStore();
   const errorId = useId();
   const txStepId = useId();
   const errorRef = useRef<HTMLDivElement>(null);
+  const [confirmationOpen, setConfirmationOpen] = useState(false);
 
   const [shipmentId, setShipmentId] = useState(generateShipmentId);
   const [supplierAddress, setSupplierAddress] = useState('');
@@ -44,10 +133,22 @@ export default function CreateShipmentPage() {
   const [totalUsdc, setTotalUsdc] = useState('');
   const [milestones, setMilestones] = useState<CreateMilestoneInput[]>(DEFAULT_MILESTONES);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
   const [txStep, setTxStep] = useState('');
   const [confirmationOpen, setConfirmationOpen] = useState(false);
+  const [touched, setTouched] = useState<Record<EditableParty, boolean>>({
+    supplier: false,
+    logistics: false,
+    arbiter: false,
+  });
+  const [submitAttempted, setSubmitAttempted] = useState(false);
   const draftLoaded = useRef(false);
+  const [saveTemplateOpen, setSaveTemplateOpen] = useState(false);
+  const [templateNotice, setTemplateNotice] = useState<string | null>(null);
+  const [prefill, setPrefill] = useState<PrefillState | null>(null);
+  const prefillKey = useRef<string | null>(null);
+  const { templates } = useShipmentTemplates(address);
+  const saveTemplate = useTemplatesStore((state) => state.saveTemplate);
 
   useEffect(() => {
     if (!address) return;
@@ -59,9 +160,9 @@ export default function CreateShipmentPage() {
       try {
         const draft = JSON.parse(savedDraft) as Partial<ShipmentDraft>;
         if (draft.shipmentId) setShipmentId(draft.shipmentId);
-        if (typeof draft.supplierAddress === 'string') setSupplierAddress(draft.supplierAddress);
-        if (typeof draft.logisticsAddress === 'string') setLogisticsAddress(draft.logisticsAddress);
-        if (typeof draft.arbiterAddress === 'string') setArbiterAddress(draft.arbiterAddress);
+        if (typeof draft.supplierAddress === 'string') setSupplierAddress(normalizeAddress(draft.supplierAddress));
+        if (typeof draft.logisticsAddress === 'string') setLogisticsAddress(normalizeAddress(draft.logisticsAddress));
+        if (typeof draft.arbiterAddress === 'string') setArbiterAddress(normalizeAddress(draft.arbiterAddress));
         if (typeof draft.totalUsdc === 'string') setTotalUsdc(draft.totalUsdc);
         if (Array.isArray(draft.milestones) && draft.milestones.length) {
           setMilestones(draft.milestones);
@@ -91,8 +192,114 @@ export default function CreateShipmentPage() {
     return () => window.clearTimeout(timeout);
   }, [address, shipmentId, supplierAddress, logisticsAddress, arbiterAddress, totalUsdc, milestones, loading]);
 
+  // "Duplicate shipment": prefill from ?from=<id>. Runs after the draft is
+  // restored, so the source shipment's values take precedence over the draft.
+  useEffect(() => {
+    if (!address || !duplicateFrom) return;
+    const key = `${address}:${duplicateFrom}`;
+    if (prefillKey.current === key) return;
+    prefillKey.current = key;
+
+    let cancelled = false;
+    setPrefill({ status: 'loading', sourceId: duplicateFrom });
+
+    shipmentsApi
+      .get(duplicateFrom)
+      .then((source) => {
+        if (cancelled) return;
+        if (!source || deriveUserRole(address, source) === 'observer') {
+          throw new Error('Shipment is not accessible');
+        }
+
+        // Always a fresh ID — never reuse the source shipment's ID
+        let freshId = generateShipmentId();
+        while (freshId === source.id) freshId = generateShipmentId();
+        setShipmentId(freshId);
+
+        setSupplierAddress(normalizeAddress(source.supplierAddress ?? ''));
+        setLogisticsAddress(normalizeAddress(source.logisticsAddress ?? ''));
+        setArbiterAddress(normalizeAddress(source.arbiterAddress ?? ''));
+        setTotalUsdc(stroopsToUsdcInput(source.totalAmount));
+        const sourceMilestones = [...(source.milestones ?? [])]
+          .sort((a, b) => a.milestoneIndex - b.milestoneIndex)
+          .map((m) => ({ name: m.name, paymentPercent: m.paymentPercent }));
+        setMilestones(sourceMilestones.length ? sourceMilestones : DEFAULT_MILESTONES);
+        // Surface any validation problems with the copied addresses right away
+        setTouched({ supplier: true, logistics: true, arbiter: true });
+        setPrefill({ status: 'loaded', sourceId: source.id });
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        console.error(err);
+        // Fall back to an empty form
+        setShipmentId(generateShipmentId());
+        setSupplierAddress('');
+        setLogisticsAddress('');
+        setArbiterAddress('');
+        setTotalUsdc('');
+        setMilestones(DEFAULT_MILESTONES);
+        setTouched({ supplier: false, logistics: false, arbiter: false });
+        setPrefill({ status: 'error', sourceId: duplicateFrom });
+      });
+
+    return () => {
+      cancelled = true;
+      prefillKey.current = null;
+    };
+  }, [address, duplicateFrom]);
+
   const totalPercent = milestones.reduce((s, m) => s + m.paymentPercent, 0);
   const percentValid = totalPercent === 100;
+  const canSaveTemplate = !!address && isSavableSplit(milestones);
+  const hasParties = [supplierAddress, logisticsAddress, arbiterAddress].some((a) => a.trim() !== '');
+
+  // Anything beyond the untouched default form counts as user input worth protecting.
+  const milestonesEdited =
+    milestones.length !== DEFAULT_MILESTONES.length ||
+    milestones.some(
+      (m, i) => m.name !== DEFAULT_MILESTONES[i].name || m.paymentPercent !== DEFAULT_MILESTONES[i].paymentPercent,
+    );
+  const formHasInput = milestonesEdited || hasParties;
+
+  const applyTemplate = (template: ShipmentTemplate) => {
+    setMilestones(cloneMilestones(template.milestones));
+    if (template.parties?.supplierAddress) setSupplierAddress(template.parties.supplierAddress);
+    if (template.parties?.logisticsAddress) setLogisticsAddress(template.parties.logisticsAddress);
+    if (template.parties?.arbiterAddress) setArbiterAddress(template.parties.arbiterAddress);
+    setTemplateNotice(`Applied template "${template.name}".`);
+  };
+
+  const handleSaveTemplate = (name: string, includeParties: boolean) => {
+    if (!address) return;
+    const template = saveTemplate(address, {
+      name,
+      milestones,
+      parties: includeParties ? { supplierAddress, logisticsAddress, arbiterAddress } : undefined,
+    });
+    setTemplateNotice(`Saved template "${template.name}".`);
+  };
+
+  const partyErrors = useMemo(
+    () =>
+      validateParties({
+        buyer: address ?? '',
+        supplier: supplierAddress,
+        logistics: logisticsAddress,
+        arbiter: arbiterAddress,
+      }),
+    [address, supplierAddress, logisticsAddress, arbiterAddress],
+  );
+
+  const visiblePartyError = (role: EditableParty) =>
+    touched[role] || submitAttempted ? partyErrors[role] : undefined;
+
+  const summaryErrors = submitAttempted
+    ? (Object.entries(partyErrors) as [PartyRole, string][])
+    : [];
+  const showErrorBanner = error != null || summaryErrors.length > 0;
+
+  const markTouched = (role: EditableParty) =>
+    setTouched((prev) => (prev[role] ? prev : { ...prev, [role]: true }));
 
   useEffect(() => {
     if (error) errorRef.current?.focus();
@@ -125,7 +332,7 @@ export default function CreateShipmentPage() {
     try {
       setTxStep('Building transaction…');
       const txHash = await createShipment({
-        callerAddress: address,
+        callerAddress: address!,
         shipmentId,
         supplier: supplierAddress,
         logistics: logisticsAddress,
@@ -138,7 +345,7 @@ export default function CreateShipmentPage() {
       setTxStep('Saving to backend…');
       await shipmentsApi.create({
         shipmentId,
-        buyerAddress: address,
+        buyerAddress: address!,
         supplierAddress,
         logisticsAddress,
         arbiterAddress,
@@ -150,8 +357,8 @@ export default function CreateShipmentPage() {
 
       localStorage.removeItem(`chainsetttle_shipment_draft_${address}`);
       router.push(`/dashboard/shipments/${shipmentId}`);
-    } catch (err: any) {
-      setError(err?.message ?? "Transaction failed. Please try again.");
+    } catch (err) {
+      setError(err);
     } finally {
       setLoading(false);
       setTxStep("");
@@ -162,6 +369,13 @@ export default function CreateShipmentPage() {
     e.preventDefault();
     if (!address) return;
     setError(null);
+    setSubmitAttempted(true);
+    setTouched({ supplier: true, logistics: true, arbiter: true });
+
+    if (Object.keys(partyErrors).length > 0) {
+      window.requestAnimationFrame(() => errorRef.current?.focus());
+      return;
+    }
 
     if (Number(totalUsdc) >= HIGH_VALUE_THRESHOLD_USDC) {
       setConfirmationOpen(true);
@@ -188,14 +402,87 @@ export default function CreateShipmentPage() {
       </p>
       <p className="text-xs text-gray-400 mb-5">Your unfinished form is saved locally in this browser.</p>
 
-      {error && (
-        <div id={errorId} ref={errorRef} tabIndex={-1} className="mb-5 p-4 rounded-xl bg-red-50 border border-red-100 flex gap-3" role="alert" aria-live="assertive">
+      {prefill?.status === 'loading' && (
+        <p className="mb-5 flex items-center gap-2 text-sm text-gray-500" role="status" aria-live="polite">
+          <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
+          Loading shipment <span className="font-mono">{prefill.sourceId}</span> to duplicate…
+        </p>
+      )}
+
+      {prefill?.status === 'loaded' && (
+        <div className="mb-5 p-3 rounded-xl bg-brand-50 border border-brand-100 flex items-start gap-3" role="status" aria-live="polite">
+          <Copy className="w-4 h-4 text-brand-600 flex-shrink-0 mt-0.5" aria-hidden="true" />
+          <p className="flex-1 text-sm text-brand-800">
+            Prefilled from shipment <span className="font-mono">{prefill.sourceId}</span>. A new shipment ID
+            has been generated — review every field before signing.
+          </p>
+          <button
+            type="button"
+            onClick={() => setPrefill(null)}
+            aria-label="Dismiss prefill notice"
+            className="p-1 text-brand-600 hover:text-brand-800 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+          >
+            <X className="w-3.5 h-3.5" aria-hidden="true" />
+          </button>
+        </div>
+      )}
+
+      {prefill?.status === 'error' && (
+        <div className="mb-5 p-3 rounded-xl bg-red-50 border border-red-100 flex items-start gap-3" role="alert">
           <AlertCircle className="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5" aria-hidden="true" />
-          <p className="text-sm text-red-700">{error}</p>
+          <p className="flex-1 text-sm text-red-700">
+            Could not load shipment <span className="font-mono">{prefill.sourceId}</span> to duplicate. It may not
+            exist or you may not have access to it. Starting with an empty form instead.
+          </p>
+          <button
+            type="button"
+            onClick={() => setPrefill(null)}
+            aria-label="Dismiss error"
+            className="p-1 text-red-500 hover:text-red-700 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+          >
+            <X className="w-3.5 h-3.5" aria-hidden="true" />
+          </button>
+        </div>
+      )}
+
+      {showErrorBanner && (
+        <div
+          id={errorId}
+          ref={errorRef}
+          tabIndex={-1}
+          className={`mb-5 p-4 rounded-xl flex gap-3 ${isTxPending(error) ? 'bg-amber-50 border border-amber-100' : 'bg-red-50 border border-red-100'}`}
+          role="alert"
+          aria-live="assertive"
+        >
+          {!isTxPending(error) && (
+            <AlertCircle className="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5" aria-hidden="true" />
+          )}
+          <div className="space-y-1">
+            {error != null && <TransactionError error={error} fallback="Transaction failed. Please try again." />}
+            {summaryErrors.length > 0 && (
+              <>
+                <p className="text-sm font-medium text-red-700">
+                  Please fix the following before signing:
+                </p>
+                <ul className="list-disc pl-4 text-sm text-red-700 space-y-0.5">
+                  {summaryErrors.map(([role, message]) => (
+                    <li key={role}>
+                      <a href={`#${generateInputId(role)}`} className="underline hover:text-red-900">
+                        {PARTY_ROLE_LABELS[role]}
+                      </a>
+                      : {message}
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+          </div>
         </div>
       )}
 
       <form onSubmit={handleSubmit} className="space-y-5">
+        <TemplatePicker templates={templates} needsConfirmation={formHasInput} onApply={applyTemplate} />
+
         {/* Shipment ID */}
         <div className="card p-5">
           <h2 className="text-sm font-semibold text-gray-900 mb-4">
@@ -233,43 +520,34 @@ export default function CreateShipmentPage() {
               <label htmlFor={generateInputId('buyer')} className="label">Your address (buyer)</label>
               <input id={generateInputId('buyer')} value={address ?? ''} readOnly className="input bg-gray-50 text-gray-500 font-mono text-xs" />
             </div>
-            <div>
-              <label htmlFor={generateInputId('supplier')} className="label">Supplier Stellar address</label>
-              <input
-                id={generateInputId('supplier')}
-                placeholder="G..."
-                value={supplierAddress}
-                onChange={(e) => setSupplierAddress(e.target.value)}
-                required
-                className="input font-mono text-xs"
-              />
-            </div>
-            <div>
-              <label htmlFor={generateInputId('logistics')} className="label">Logistics Stellar address</label>
-              <input
-                id={generateInputId('logistics')}
-                placeholder="G..."
-                value={logisticsAddress}
-                onChange={(e) => setLogisticsAddress(e.target.value)}
-                required
-                className="input font-mono text-xs"
-              />
-            </div>
-            <div>
-              <label htmlFor={generateInputId('arbiter')} className="label">Arbiter Stellar address</label>
-              <input
-                id={generateInputId('arbiter')}
-                placeholder="G..."
-                value={arbiterAddress}
-                onChange={(e) => setArbiterAddress(e.target.value)}
-                required
-                className="input font-mono text-xs"
-                aria-describedby={`${generateInputId('arbiter')}-hint`}
-              />
-              <p id={`${generateInputId('arbiter')}-hint`} className="text-xs text-gray-400 mt-1">
-                Resolves disputes. Can be a trusted third party or a DAO address.
-              </p>
-            </div>
+            <AddressField
+              role="supplier"
+              label="Supplier Stellar address"
+              value={supplierAddress}
+              onChange={(v) => setSupplierAddress(normalizeAddress(v))}
+              onBlur={() => markTouched('supplier')}
+              error={visiblePartyError('supplier')}
+              touched={touched.supplier}
+            />
+            <AddressField
+              role="logistics"
+              label="Logistics Stellar address"
+              value={logisticsAddress}
+              onChange={(v) => setLogisticsAddress(normalizeAddress(v))}
+              onBlur={() => markTouched('logistics')}
+              error={visiblePartyError('logistics')}
+              touched={touched.logistics}
+            />
+            <AddressField
+              role="arbiter"
+              label="Arbiter Stellar address"
+              value={arbiterAddress}
+              onChange={(v) => setArbiterAddress(normalizeAddress(v))}
+              onBlur={() => markTouched('arbiter')}
+              error={visiblePartyError('arbiter')}
+              touched={touched.arbiter}
+              hint="Resolves disputes. Can be a trusted third party or a DAO address."
+            />
           </div>
         </div>
 
@@ -346,14 +624,32 @@ export default function CreateShipmentPage() {
             ))}
           </div>
 
-          <button
-            type="button"
-            onClick={addMilestone}
-            className="btn-ghost text-xs"
-          >
-            <Plus className="w-3.5 h-3.5" />
-            Add milestone
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={addMilestone}
+              className="btn-ghost text-xs"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              Add milestone
+            </button>
+            <button
+              type="button"
+              onClick={() => setSaveTemplateOpen(true)}
+              disabled={!canSaveTemplate}
+              title={canSaveTemplate ? undefined : 'Name every milestone and make the split total 100% to save it as a template.'}
+              className="btn-ghost text-xs disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <BookmarkPlus className="w-3.5 h-3.5" />
+              Save as template
+            </button>
+          </div>
+          {templateNotice && (
+            <p className="mt-3 flex items-center gap-1.5 text-xs text-green-700" role="status">
+              <CheckCircle2 className="h-3.5 w-3.5" aria-hidden="true" />
+              {templateNotice}
+            </p>
+          )}
         </div>
 
         {/* Submit */}
@@ -384,6 +680,13 @@ export default function CreateShipmentPage() {
         </p>
       </form>
 
+      <SaveTemplateDialog
+        open={saveTemplateOpen}
+        hasParties={hasParties}
+        onClose={() => setSaveTemplateOpen(false)}
+        onSave={handleSaveTemplate}
+      />
+
       {confirmationOpen && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-gray-900/40 p-4"
@@ -409,7 +712,7 @@ export default function CreateShipmentPage() {
               <strong className="text-gray-900">{totalUsdc} USDC</strong> in
               escrow on{" "}
               <strong className="text-gray-900">
-                {process.env.NEXT_PUBLIC_STELLAR_NETWORK === "mainnet"
+                {env.stellarNetwork === "mainnet"
                   ? "Mainnet"
                   : "Testnet"}
               </strong>
@@ -443,5 +746,13 @@ export default function CreateShipmentPage() {
         </div>
       )}
     </div>
+  );
+}
+
+export default function CreateShipmentPage() {
+  return (
+    <Suspense fallback={<div className="h-64" />}>
+      <CreateShipmentPageContent />
+    </Suspense>
   );
 }

@@ -15,6 +15,7 @@ import type {
   User,
   ChainEvent,
   CreateShipmentInput,
+  Comment,
 } from '@/types';
 
 // ----------------------------------------------------------------
@@ -80,6 +81,14 @@ export const shipmentsApi = {
   /** Force sync shipment state from Stellar chain */
   sync: async (id: string): Promise<void> => {
     await apiClient.post(`/shipments/${id}/sync`);
+  },
+
+  /** Cancel an active shipment (buyer only) */
+  cancel: async (id: string): Promise<Shipment> => {
+    const { data } = await apiClient.post<ApiResponse<Shipment>>(
+      `/shipments/${id}/cancel`,
+    );
+    return data.data;
   },
 };
 
@@ -150,5 +159,36 @@ export const notificationsApi = {
 
   markAllRead: async (): Promise<void> => {
     await apiClient.patch('/notifications/read-all');
+  },
+};
+
+// ----------------------------------------------------------------
+// Comments
+// ----------------------------------------------------------------
+
+export const commentsApi = {
+  /** List all comments for a shipment */
+  list: async (shipmentId: string): Promise<Comment[]> => {
+    const { data } = await apiClient.get<ApiResponse<Comment[]> | Comment[]>(
+      `/shipments/${shipmentId}/comments`,
+    );
+    if (Array.isArray(data)) return data;
+    if (Array.isArray((data as ApiResponse<Comment[]>).data)) {
+      return (data as ApiResponse<Comment[]>).data;
+    }
+    return (data as any)?.data?.data ?? [];
+  },
+
+  /** Create a comment on a shipment */
+  create: async (
+    shipmentId: string,
+    body: string | { content: string },
+  ): Promise<Comment> => {
+    const payload = typeof body === 'string' ? { content: body } : body;
+    const { data } = await apiClient.post<ApiResponse<Comment> | Comment>(
+      `/shipments/${shipmentId}/comments`,
+      payload,
+    );
+    return (data as ApiResponse<Comment>).data ?? (data as Comment);
   },
 };

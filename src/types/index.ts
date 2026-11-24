@@ -22,6 +22,7 @@ export type UserRole =
   | 'arbiter'
   | 'admin'
   | 'observer';
+export type UserRole = 'BUYER' | 'SUPPLIER' | 'LOGISTICS' | 'ARBITER' | 'ADMIN';
 
 export interface Milestone {
   id: string;
@@ -47,6 +48,7 @@ export interface Shipment {
   arbiterAddress: string;
   tokenAddress: string;
   totalAmount: string;      // BigInt serialised as string (stroops)
+  totalAmount: string; // BigInt serialised as string (stroops)
   releasedAmount: string;
   status: ShipmentStatus;
   txHash: string | null;
@@ -68,6 +70,10 @@ export interface ChainEvent {
   processed?: boolean;
   createdAt?: string;
   timestamp?: string;
+  timestamp?: string;
+  payload?: Record<string, unknown>;
+  processed?: boolean;
+  createdAt?: string;
   data?: Record<string, unknown>;
 }
 
@@ -108,6 +114,25 @@ export interface CreateShipmentInput {
   milestones: CreateMilestoneInput[];
 }
 
+  totalAmount: string; // human-readable USDC e.g. "500"
+  milestones: CreateMilestoneInput[];
+}
+
+// Comments
+export interface Comment {
+  id: string;
+  shipmentId: string;
+  authorAddress: string;
+  authorRole?: string;
+  content: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface CreateCommentInput {
+  content: string;
+}
+
 // API response envelope from the backend
 export interface ApiResponse<T> {
   success: boolean;
@@ -117,9 +142,30 @@ export interface ApiResponse<T> {
 
 export interface PaginatedMeta {
   total: number;
+export interface PaginatedResponse<T> {
+  data: T[];
   page: number;
   limit: number;
   totalPages: number;
+  meta?: {
+    total: number;
+    page: number;
+    limit: number;
+    totalPages: number;
+  };
+}
+
+// Auth
+export interface AuthUser {
+  id: string;
+  stellarAddress: string;
+  role: UserRole;
+}
+
+export interface JwtPayload {
+  sub: string;
+  stellarAddress: string;
+  role: UserRole;
 }
 
 export interface PaginatedResponse<T> {

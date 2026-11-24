@@ -42,7 +42,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
   useEffect(() => {
     notificationsApi
       .list({ unreadOnly: true, limit: 1 })
-      .then((res) => setUnreadCount(res.meta.total))
+      .then((res) => setUnreadCount(res.total ?? res.meta?.total ?? 0))
       .catch(() => {});
   }, [pathname]);
 

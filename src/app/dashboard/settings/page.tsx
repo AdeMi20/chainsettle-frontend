@@ -2,6 +2,8 @@
 
 import { useState } from 'react';
 import { Copy, LogOut, UserRound, Globe, PlayCircle } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Bell, Copy, LogOut, UserRound } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useTranslations } from 'next-intl';
 import { useAuthStore, type NotificationPreferences } from '@/lib/hooks/use-auth-store';
@@ -10,6 +12,9 @@ import { useCurrency } from '@/lib/hooks/use-currency';
 import { ApproximateFiat } from '@/components/ui/ApproximateFiat';
 import { resetTour } from '@/components/tour/TourGuide';
 import type { SupportedCurrency } from '@/types';
+import { TemplateManager } from '@/components/templates/TemplateManager';
+
+type PermissionState = 'default' | 'granted' | 'denied' | 'unsupported';
 
 export default function SettingsPage() {
   const t = useTranslations('settings');
@@ -27,8 +32,17 @@ export default function SettingsPage() {
   } = useAuthStore();
   const [name, setName] = useState(displayName ?? '');
   const [tourResetSuccess, setTourResetSuccess] = useState(false);
+  const [permission, setPermission] = useState<PermissionState>('default');
   const { balances, loading, error } = useWalletBalance(address);
   const { currencies } = useCurrency();
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !('Notification' in window)) {
+      setPermission('unsupported');
+      return;
+    }
+    setPermission(Notification.permission as PermissionState);
+  }, []);
 
   const handleDisconnect = () => {
     logout();
@@ -51,6 +65,31 @@ export default function SettingsPage() {
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('chainsettle:replay-tour'));
       }
+  const desktopNotificationsEnabled =
+    permission === 'granted' && notificationPreferences.desktopNotifications;
+
+  const toggleDesktopNotifications = async () => {
+    if (permission === 'unsupported' || permission === 'denied') return;
+
+    if (desktopNotificationsEnabled) {
+      setNotificationPreferences({
+        ...notificationPreferences,
+        desktopNotifications: false,
+      });
+      return;
+    }
+
+    let nextPermission = permission;
+    if (permission !== 'granted') {
+      nextPermission = (await Notification.requestPermission()) as PermissionState;
+      setPermission(nextPermission);
+    }
+
+    if (nextPermission === 'granted') {
+      setNotificationPreferences({
+        ...notificationPreferences,
+        desktopNotifications: true,
+      });
     }
   };
 
@@ -133,6 +172,37 @@ export default function SettingsPage() {
                   />
                 </label>
               ))}
+
+              <label
+                className={`flex items-center justify-between gap-4 px-4 py-3 ${
+                  permission === 'denied' || permission === 'unsupported'
+                    ? 'cursor-not-allowed opacity-60'
+                    : 'cursor-pointer'
+                }`}
+              >
+                <span className="flex items-start gap-3">
+                  <Bell className="mt-0.5 h-4 w-4 text-gray-400" />
+                  <span>
+                    <span className="block text-sm font-medium text-gray-800">
+                      {t('desktopNotifications')}
+                    </span>
+                    <span className="block text-xs text-gray-500">
+                      {permission === 'denied'
+                        ? t('desktopNotificationsDenied')
+                        : permission === 'unsupported'
+                          ? t('desktopNotificationsUnsupported')
+                          : t('desktopNotificationsDescription')}
+                    </span>
+                  </span>
+                </span>
+                <input
+                  type="checkbox"
+                  checked={desktopNotificationsEnabled}
+                  disabled={permission === 'denied' || permission === 'unsupported'}
+                  onChange={toggleDesktopNotifications}
+                  className="h-4 w-4 rounded border-gray-300 text-brand-600 focus:ring-brand-500 disabled:cursor-not-allowed"
+                />
+              </label>
             </div>
           </div>
 
@@ -203,6 +273,8 @@ export default function SettingsPage() {
           </div>
         </div>
       </section>
+
+      <TemplateManager owner={address} />
     </div>
   );
 }

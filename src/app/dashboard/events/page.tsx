@@ -15,6 +15,12 @@ import { useEventsStream } from '@/lib/hooks/use-events-stream';
 const PAGE_SIZE = 20;
 
 function EventsContent() {
+import { timeAgo } from '@/lib/utils';
+import { Activity } from 'lucide-react';
+
+const PAGE_SIZE = 20;
+
+function EventsPageContent() {
   const t = useTranslations('events');
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -219,14 +225,37 @@ function EventsContent() {
                     </tr>
                   );
                 })}
+                {events.map((event: ChainEvent) => (
+                  <tr key={event.id}>
+                    <td className="px-4 py-3 text-sm font-medium text-gray-900">
+                      {event.eventName}
+                    </td>
+                    <td className="px-4 py-3 text-sm">
+                      <a
+                        href={`/dashboard/shipments/${event.shipmentId}`}
+                        className="text-blue-600 hover:underline"
+                      >
+                        {event.shipmentId}
+                      </a>
+                    </td>
+                    <td className="px-4 py-3 text-sm text-gray-700">{event.ledger}</td>
+                    <td className="px-4 py-3 text-sm">
+                      <StellarLink type="tx" value={event.txHash} />
+                    </td>
+                    <td className="px-4 py-3 text-sm text-gray-500">
+                      {timeAgo(event.createdAt ?? event.timestamp ?? null)}
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
 
           <Pagination
-            currentPage={page}
+            page={page}
             totalPages={totalPages}
-            onPageChange={(next) => updateParams({ page: next })}
+            onPrev={() => updateParams({ page: page - 1 })}
+            onNext={() => updateParams({ page: page + 1 })}
           />
         </>
       )}
@@ -241,3 +270,9 @@ export default function EventsPage() {
     </Suspense>
   );
 }
+    <Suspense fallback={<div className="p-8 text-center text-gray-500">Loading events...</div>}>
+      <EventsPageContent />
+    </Suspense>
+  );
+}
+

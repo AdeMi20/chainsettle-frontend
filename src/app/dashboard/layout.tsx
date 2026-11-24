@@ -7,6 +7,7 @@ import { TopBar } from '@/components/layout/TopBar';
 import { Breadcrumbs } from '@/components/layout/Breadcrumbs';
 import { KeyboardShortcuts } from '@/components/layout/KeyboardShortcuts';
 import { TourGuide } from '@/components/tour/TourGuide';
+import { CommandPalette } from '@/components/CommandPalette';
 
 export default function DashboardLayout({ children }: { children: ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -32,6 +33,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
       <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
       <KeyboardShortcuts />
       <TourGuide />
+      <CommandPalette />
 
       <div className="flex flex-col flex-1 overflow-hidden">
         <TopBar onMenuClick={() => setSidebarOpen((v) => !v)} />
