@@ -1,5 +1,9 @@
 'use client';
 
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import Link from 'next/link';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { Download, Plus, Package, Search, SlidersHorizontal, X, ArrowUp, ArrowDown, ArrowUpDown, Loader2 } from 'lucide-react';
 import { useEffect, useRef, useState, useMemo, Suspense } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
@@ -26,6 +30,7 @@ import { ShipmentCardSkeleton } from '@/components/shipments/ShipmentCardSkeleto
 import { EmptyState } from '@/components/EmptyState';
 import { Pagination } from '@/components/Pagination';
 import { stroopsToUsdc } from '@/lib/utils';
+import { getAllShipmentNotes } from '@/lib/services/notes';
 import type { Shipment, ShipmentStatus } from '@/types';
 import { useTranslations } from 'next-intl';
 
@@ -56,6 +61,17 @@ function ShipmentsPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
+  const requestedSort = searchParams?.get("sort");
+  const requestedDirection = searchParams?.get("direction");
+  const sortKey: SortKey = validSortKeys.includes(requestedSort as SortKey)
+    ? (requestedSort as SortKey)
+    : "createdAt";
+  const sortDirection: SortDirection = validSortDirections.includes(
+    requestedDirection as SortDirection,
+  )
+    ? (requestedDirection as SortDirection)
+    : "desc";
+
   const [shipments, setShipments] = useState<Shipment[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -68,12 +84,16 @@ function ShipmentsPageContent() {
   const [totalPages, setTotalPages] = useState(1);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [cancelling, setCancelling] = useState(false);
+  const [cancelModalOpen, setCancelModalOpen] = useState(false);
+  const [bulkActionLoading, setBulkActionLoading] = useState(false);
+  const [bulkActionError, setBulkActionError] = useState<string | null>(null);
   const [statusCounts, setStatusCounts] = useState({
     All: 0,
     Active: 0,
     Completed: 0,
     Cancelled: 0,
   });
+  const [personalNotes, setPersonalNotes] = useState<Record<string, string>>({});
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   const t = useTranslations('dashboard');
@@ -158,6 +178,23 @@ function ShipmentsPageContent() {
   }, [address]);
 
   useEffect(() => {
+    if (address) {
+      setPersonalNotes(getAllShipmentNotes(address));
+    } else {
+      setPersonalNotes({});
+    }
+
+    const handleNotesUpdated = () => {
+      if (address) {
+        setPersonalNotes(getAllShipmentNotes(address));
+      }
+    };
+
+    window.addEventListener('chainsettle:notes-updated', handleNotesUpdated);
+    return () => window.removeEventListener('chainsettle:notes-updated', handleNotesUpdated);
+  }, [address]);
+
+  useEffect(() => {
     const paramStatus = searchParams?.get("status") ?? "";
     if (paramStatus && !validStatusValues.includes(paramStatus)) {
       setStatusFilter("");
@@ -201,15 +238,13 @@ function ShipmentsPageContent() {
   const hasAdvancedFilters = fromDate || toDate || dateField !== 'created' || counterpartyRole;
 
   const filtered = shipments.filter((shipment) => {
-    const isShipmentArchived = archivedSet.has(shipment.id);
-    if (statusFilter === 'Archived') {
-      if (!isShipmentArchived) return false;
-    } else if (isShipmentArchived) {
-      return false;
-    }
+    const query = search.trim().toLowerCase();
+    const userNote = (personalNotes[shipment.id] || '').toLowerCase();
     const matchesSearch =
-      shipment.id.toLowerCase().includes(search.toLowerCase()) ||
-      shipment.supplierAddress.toLowerCase().includes(search.toLowerCase());
+      !query ||
+      shipment.id.toLowerCase().includes(query) ||
+      shipment.supplierAddress.toLowerCase().includes(query) ||
+      userNote.includes(query);
     const filterDate = (dateField === 'updated' ? shipment.updatedAt : shipment.createdAt).slice(0, 10);
     const matchesFrom = !fromDate || filterDate >= fromDate;
     const matchesTo = !toDate || filterDate <= toDate;
@@ -559,7 +594,7 @@ function ShipmentsPageContent() {
             <input
               type="checkbox"
               checked={allVisibleSelected}
-              onChange={toggleSelectAll}
+              onChange={toggleAllVisible}
               className="h-4 w-4 rounded border-gray-300 text-brand-600 focus:ring-brand-500"
             />
             Select all visible
@@ -603,11 +638,11 @@ function ShipmentsPageContent() {
               {cancellableShipments.length > 0 && (
                 <button
                   type="button"
-                  onClick={cancelSelected}
-                  disabled={cancelling}
+                  onClick={() => setCancelModalOpen(true)}
+                  disabled={bulkActionLoading}
                   className="btn-secondary text-xs text-red-600 hover:bg-red-50"
                 >
-                  {cancelling ? (
+                  {bulkActionLoading ? (
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
                   ) : (
                     <X className="h-3.5 w-3.5" />
