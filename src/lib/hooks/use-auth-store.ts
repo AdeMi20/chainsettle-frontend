@@ -9,13 +9,14 @@
 
 import { create } from 'zustand';
 import type { User } from '@/types';
-import { getTokenExpiry, isExpired } from '@/lib/auth/jwt';
+import { decodeJwtPayload, getTokenExpiry, getTokenRole, isExpired } from '@/lib/auth/jwt';
 
 const DEFAULT_COOKIE_MAX_AGE = 7 * 24 * 60 * 60;
 
 function clearStoredSession() {
   localStorage.removeItem('chainsetttle_token');
   localStorage.removeItem('chainsetttle_address');
+  localStorage.removeItem('chainsetttle_user');
   document.cookie = 'chainsetttle_token=; path=/; max-age=0';
 }
 
@@ -66,6 +67,7 @@ export const useAuthStore = create<AuthState>((set) => ({
     if (typeof window !== 'undefined') {
       localStorage.setItem('chainsetttle_token', token);
       localStorage.setItem('chainsetttle_address', address);
+      localStorage.setItem('chainsetttle_user', JSON.stringify(user));
       // Keep the middleware cookie alive exactly as long as the token itself
       const maxAge = expiresAt !== null
         ? Math.max(0, Math.floor((expiresAt - Date.now()) / 1000))
@@ -144,10 +146,36 @@ export const useAuthStore = create<AuthState>((set) => ({
           return;
         }
         const storedPreferences = localStorage.getItem(`chainsetttle_notification_preferences_${address}`);
+        let restoredUser: User | null = null;
+        const storedUser = localStorage.getItem('chainsetttle_user');
+        if (storedUser) {
+          try {
+            restoredUser = JSON.parse(storedUser) as User;
+          } catch {
+            restoredUser = null;
+          }
+        }
+        if (!restoredUser) {
+          const payload = decodeJwtPayload(token);
+          const tokenRole = getTokenRole(token);
+          if (tokenRole) {
+            restoredUser = {
+              id: typeof payload?.sub === 'string' ? payload.sub : '',
+              stellarAddress:
+                typeof payload?.stellarAddress === 'string' ? payload.stellarAddress : address,
+              email: null,
+              name: null,
+              role: tokenRole,
+              createdAt: '',
+              updatedAt: '',
+            };
+          }
+        }
         set({
           token,
           expiresAt,
           address,
+          user: restoredUser,
           displayName: localStorage.getItem(`chainsetttle_display_name_${address}`),
           notificationPreferences: storedPreferences
             ? { ...defaultNotificationPreferences, ...JSON.parse(storedPreferences) }
