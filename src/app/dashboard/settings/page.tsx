@@ -1,11 +1,17 @@
 'use client';
 
+import { useState } from 'react';
+import { Copy, LogOut, UserRound, Globe, PlayCircle } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Bell, Copy, LogOut, UserRound } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useTranslations } from 'next-intl';
 import { useAuthStore, type NotificationPreferences } from '@/lib/hooks/use-auth-store';
 import { useWalletBalance } from '@/lib/hooks/use-wallet-balance';
+import { useCurrency } from '@/lib/hooks/use-currency';
+import { ApproximateFiat } from '@/components/ui/ApproximateFiat';
+import { resetTour } from '@/components/tour/TourGuide';
+import type { SupportedCurrency } from '@/types';
 import { TemplateManager } from '@/components/templates/TemplateManager';
 
 type PermissionState = 'default' | 'granted' | 'denied' | 'unsupported';
@@ -17,14 +23,18 @@ export default function SettingsPage() {
     address,
     user,
     displayName,
+    displayCurrency,
     notificationPreferences,
     logout,
     setDisplayName,
+    setDisplayCurrency,
     setNotificationPreferences,
   } = useAuthStore();
   const [name, setName] = useState(displayName ?? '');
+  const [tourResetSuccess, setTourResetSuccess] = useState(false);
   const [permission, setPermission] = useState<PermissionState>('default');
   const { balances, loading, error } = useWalletBalance(address);
+  const { currencies } = useCurrency();
 
   useEffect(() => {
     if (typeof window === 'undefined' || !('Notification' in window)) {
@@ -46,6 +56,15 @@ export default function SettingsPage() {
     });
   };
 
+  const handleReplayTour = () => {
+    if (address) {
+      resetTour(address, user?.role);
+      setTourResetSuccess(true);
+      setTimeout(() => setTourResetSuccess(false), 3000);
+      // Trigger tour start event
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('chainsettle:replay-tour'));
+      }
   const desktopNotificationsEnabled =
     permission === 'granted' && notificationPreferences.desktopNotifications;
 
@@ -92,7 +111,7 @@ export default function SettingsPage() {
           </div>
         </div>
 
-        <div className="space-y-4 pt-5">
+        <div className="space-y-5 pt-5">
           <div>
             <label htmlFor="display-name" className="label">{t('displayName')}</label>
             <div className="flex items-center gap-2">
@@ -107,6 +126,29 @@ export default function SettingsPage() {
                 {t('saveName')}
               </button>
             </div>
+          </div>
+
+          {/* Display Currency Preference */}
+          <div>
+            <label htmlFor="display-currency" className="label flex items-center gap-1.5">
+              <Globe className="w-3.5 h-3.5 text-gray-500" />
+              <span>Display currency preference</span>
+            </label>
+            <p className="text-xs text-gray-500 mb-2">
+              Select your local currency to display approximate fiat equivalents next to on-chain amounts. Rates are cached for 5 minutes.
+            </p>
+            <select
+              id="display-currency"
+              value={displayCurrency}
+              onChange={(e) => setDisplayCurrency(e.target.value as SupportedCurrency)}
+              className="input max-w-xs bg-white cursor-pointer"
+            >
+              {currencies.map((curr) => (
+                <option key={curr.code} value={curr.code}>
+                  {curr.label}
+                </option>
+              ))}
+            </select>
           </div>
 
           <div>
@@ -193,16 +235,42 @@ export default function SettingsPage() {
                   <p className="mt-1 text-lg font-semibold text-gray-900">
                     {loading ? '...' : error ? '--' : Number(asset === 'USDC' ? balances?.usdc : balances?.xlm ?? 0).toFixed(2)}
                   </p>
+                  {asset === 'USDC' && !loading && !error && balances?.usdc && (
+                    <div className="mt-0.5">
+                      <ApproximateFiat amount={balances.usdc} className="text-xs text-brand-600 font-medium" />
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
             {error && <p className="mt-2 text-xs text-red-600">{t('balanceUnavailable')}</p>}
           </div>
 
-          <button type="button" onClick={handleDisconnect} className="btn-secondary text-red-600 hover:bg-red-50">
-            <LogOut className="h-4 w-4" />
-            {t('disconnectWallet')}
-          </button>
+          {/* Role Tour Replay */}
+          <div className="border-t border-gray-100 pt-4">
+            <p className="label">Product walkthrough</p>
+            <p className="text-xs text-gray-500 mb-3">
+              Replay the step-by-step introduction tour customized for your current role.
+            </p>
+            <button
+              type="button"
+              onClick={handleReplayTour}
+              className="btn-secondary text-xs flex items-center gap-2"
+            >
+              <PlayCircle className="w-4 h-4 text-brand-600" />
+              <span>Replay tour</span>
+            </button>
+            {tourResetSuccess && (
+              <p className="mt-1.5 text-xs text-green-600 font-medium">Tour reset! You can now view the tour.</p>
+            )}
+          </div>
+
+          <div className="border-t border-gray-100 pt-4">
+            <button type="button" onClick={handleDisconnect} className="btn-secondary text-red-600 hover:bg-red-50">
+              <LogOut className="h-4 w-4" />
+              {t('disconnectWallet')}
+            </button>
+          </div>
         </div>
       </section>
 

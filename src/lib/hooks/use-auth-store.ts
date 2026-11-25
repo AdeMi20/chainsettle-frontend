@@ -8,6 +8,7 @@
  */
 
 import { create } from 'zustand';
+import type { User, SupportedCurrency } from '@/types';
 import type { User } from '@/types';
 import { getTokenExpiry, isExpired } from '@/lib/auth/jwt';
 
@@ -40,6 +41,7 @@ interface AuthState {
   expiresAt: number | null;
   user: User | null;
   displayName: string | null;
+  displayCurrency: SupportedCurrency;
   notificationPreferences: NotificationPreferences;
   isConnected: boolean;
 
@@ -47,6 +49,7 @@ interface AuthState {
   setAuth: (address: string, token: string, user: User) => void;
   setAddress: (address: string) => void;
   setDisplayName: (displayName: string) => void;
+  setDisplayCurrency: (currency: SupportedCurrency) => void;
   setNotificationPreferences: (preferences: NotificationPreferences) => void;
   logout: () => void;
   rehydrate: () => void;
@@ -58,6 +61,7 @@ export const useAuthStore = create<AuthState>((set) => ({
   expiresAt: null,
   user: null,
   displayName: null,
+  displayCurrency: 'USD',
   notificationPreferences: defaultNotificationPreferences,
   isConnected: false,
 
@@ -78,12 +82,16 @@ export const useAuthStore = create<AuthState>((set) => ({
     const storedPreferences = typeof window !== 'undefined'
       ? localStorage.getItem(`chainsetttle_notification_preferences_${address}`)
       : null;
+    const storedCurrency = (typeof window !== 'undefined'
+      ? (localStorage.getItem(`chainsetttle_display_currency_${address}`) || localStorage.getItem('chainsetttle_display_currency'))
+      : null) as SupportedCurrency | null;
     set({
       address,
       token,
       expiresAt,
       user,
       displayName,
+      displayCurrency: storedCurrency || 'USD',
       notificationPreferences: storedPreferences
         ? { ...defaultNotificationPreferences, ...JSON.parse(storedPreferences) }
         : defaultNotificationPreferences,
@@ -103,6 +111,17 @@ export const useAuthStore = create<AuthState>((set) => ({
       else localStorage.removeItem(`chainsetttle_display_name_${address}`);
     }
     set({ displayName: value });
+  },
+
+  setDisplayCurrency: (currency) => {
+    const address = useAuthStore.getState().address;
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('chainsetttle_display_currency', currency);
+      if (address) {
+        localStorage.setItem(`chainsetttle_display_currency_${address}`, currency);
+      }
+    }
+    set({ displayCurrency: currency });
   },
 
   setNotificationPreferences: (preferences) => {
@@ -126,6 +145,7 @@ export const useAuthStore = create<AuthState>((set) => ({
       expiresAt: null,
       user: null,
       displayName: null,
+      displayCurrency: 'USD',
       notificationPreferences: defaultNotificationPreferences,
       isConnected: false,
     });
@@ -144,11 +164,14 @@ export const useAuthStore = create<AuthState>((set) => ({
           return;
         }
         const storedPreferences = localStorage.getItem(`chainsetttle_notification_preferences_${address}`);
+        const storedCurrency = (localStorage.getItem(`chainsetttle_display_currency_${address}`) ||
+          localStorage.getItem('chainsetttle_display_currency')) as SupportedCurrency | null;
         set({
           token,
           expiresAt,
           address,
           displayName: localStorage.getItem(`chainsetttle_display_name_${address}`),
+          displayCurrency: storedCurrency || 'USD',
           notificationPreferences: storedPreferences
             ? { ...defaultNotificationPreferences, ...JSON.parse(storedPreferences) }
             : defaultNotificationPreferences,

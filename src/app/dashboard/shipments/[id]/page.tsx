@@ -10,6 +10,8 @@ import { useAuthStore } from '@/lib/hooks/use-auth-store';
 import { MilestoneTimeline } from '@/components/milestones/MilestoneTimeline';
 import { ShipmentMeta } from '@/components/shipments/ShipmentMeta';
 import { ShipmentProgress } from '@/components/shipments/ShipmentProgress';
+import { ShipmentNotes } from '@/components/shipments/ShipmentNotes';
+import { shipmentStatusBadge, timeAgo, deriveUserRole, roleBadge } from '@/lib/utils';
 import { ShipmentComments } from '@/components/shipments/ShipmentComments';
 import { EscrowBalanceCard } from '@/components/shipments/EscrowBalanceCard';
 import { shipmentStatusBadge, timeAgo, deriveUserRole, roleBadge, stroopsToUsdc } from '@/lib/utils';
@@ -291,6 +293,9 @@ export default function ShipmentDetailPage() {
         />
       </div>
 
+      {/* Private Notes Panel */}
+      <div className="mt-5">
+        <ShipmentNotes shipmentId={shipment.id} />
       {/* Discussion & Notes Thread */}
       <div className="mt-5">
         <ShipmentComments

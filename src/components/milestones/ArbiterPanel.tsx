@@ -12,6 +12,7 @@ interface ArbiterPanelProps {
   milestone: Milestone;
   shipment: Shipment;
   onUpdate: () => void;
+  onError?: (msg: string) => void;
   onError?: (err: unknown) => void;
 }
 
@@ -35,6 +36,10 @@ export function ArbiterPanel({ milestone, shipment, onUpdate, onError }: Arbiter
         approve,
       });
       onUpdate();
+    } catch (err: any) {
+      const msg = err?.message ?? `Failed to ${action} milestone`;
+      if (onError) onError(msg);
+      else alert(msg);
     } catch (err) {
       if (onError) onError(err);
       else alert(parseContractError(err).message);
